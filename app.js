@@ -13,6 +13,8 @@ const userRoutes = require('./routes/users');
 const assignmentRoutes = require('./routes/assignments');
 const submissionRoutes = require('./routes/submissions');
 const testRoutes = require('./routes/test');
+const classroomRoutes = require('./routes/classrooms');
+
 
 // Load environment variables
 dotenv.config();
@@ -48,6 +50,7 @@ app.use('/api/assignments', assignmentRoutes);
 app.use('/api/submissions', submissionRoutes);
 app.use('/uploads', express.static('uploads'));
 app.use('/api/test', testRoutes);
+app.use('/api/classrooms', classroomRoutes);
 
 
 // Error handling middleware
