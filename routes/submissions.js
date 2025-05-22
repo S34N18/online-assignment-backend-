@@ -1,5 +1,6 @@
 const express = require('express');
 const router = express.Router();
+
 const {
   getSubmissions,
   getSubmission,
@@ -9,70 +10,52 @@ const {
   gradeSubmission,
   downloadSubmissionFile
 } = require('../controllers/submissions');
+
 const { protect, authorize } = require('../middleware/auth');
 
-// ✅ Add multer and path setup
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
 
-// ✅ Configure multer storage
+// ✅ Configure Multer storage
 const storage = multer.diskStorage({
   destination: function (req, file, cb) {
-    cb(null, 'uploads/submissions/');
+    const dir = 'uploads/submissions';
+    if (!fs.existsSync(dir)) {
+      fs.mkdirSync(dir, { recursive: true });
+    }
+    cb(null, dir);
   },
   filename: function (req, file, cb) {
     cb(null, Date.now() + '-' + file.originalname);
   },
 });
+
 const upload = multer({ storage });
 
-// ✅ File upload route
+
+// ✅ FILE UPLOAD: Student submits assignment
 router.post(
-  '/upload',
+  '/',
   protect,
   authorize('student'),
-  upload.single('file'),
-  async (req, res) => {
-    try {
-      const Submission = require('../models/Submission');
-      const newSubmission = new Submission({
-        student: req.user.id,
-        assignmentId: req.body.assignmentId,
-        filename: req.file.filename,
-        originalName: req.file.originalname,
-        submittedAt: new Date(),
-      });
-      await newSubmission.save();
-      res.status(200).json({ message: 'File uploaded successfully', submission: newSubmission });
-    } catch (err) {
-      res.status(500).json({ message: 'Upload failed', error: err.message });
-    }
-  }
+  upload.array('files', 5), // Accept up to 5 files
+  createSubmission
 );
 
-// ✅ File download route
+
+// ✅ FILE DOWNLOAD: Allow both lecturers and students to download submission files
 router.get(
   '/download/:filename',
-  protect,
-  authorize('lecturer'),
-  (req, res) => {
-    const filePath = path.join(__dirname, '../uploads/submissions/', req.params.filename);
-
-    fs.access(filePath, fs.constants.F_OK, (err) => {
-      if (err) {
-        return res.status(404).json({ message: 'File not found' });
-      }
-      res.download(filePath, req.params.filename);
-    });
-  }
+  protect, // Keep protection but remove lecturer-only restriction
+  downloadSubmissionFile
 );
 
-// ✅ Your existing RESTful routes
+
+// ✅ RESTful API routes
 router
   .route('/')
-  .get(protect, getSubmissions)
-  .post(protect, authorize('student'), createSubmission);
+  .get(protect, getSubmissions); // Only lecturers/students can view depending on role
 
 router
   .route('/:id')
@@ -85,8 +68,4 @@ router
   .put(protect, authorize('lecturer'), gradeSubmission);
 
 
-  router.get('/download/:filename', protect, authorize('lecturer'), downloadSubmissionFile);
-
-
-// ✅ Export at the end
 module.exports = router;

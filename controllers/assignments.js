@@ -1,3 +1,4 @@
+
 const Assignment = require('../models/Assignment');
 const multer = require('multer');
 const path = require('path');
@@ -33,7 +34,7 @@ const upload = multer({
       cb('Error: File upload only supports the following filetypes - pdf, doc, docx, txt');
     }
   }
-}).array('attachments', 5); // Allow up to 5 files
+}).single('file'); // FIXED: Changed from fields() to single()
 
 // @desc    Get all assignments
 // @route   GET /api/assignments
@@ -102,46 +103,64 @@ exports.getAssignment = async (req, res) => {
 // @route   POST /api/assignments
 // @access  Private (Lecturers only)
 exports.createAssignment = async (req, res) => {
-  try {
-    // Handle file upload
-    upload(req, res, async (err) => {
+  upload(req, res, async (err) => {
+    try {
       if (err) {
+        console.error('File upload error:', err);
         return res.status(400).json({
           success: false,
-          message: err
+          message: typeof err === 'string' ? err : 'File upload error'
         });
       }
 
-      const { title, description, dueDate, allowedFormats, maxFileSize } = req.body;
+      console.log('Request body:', req.body); // Debug log
+      console.log('Uploaded file:', req.file); // Debug log
 
-      const attachments = req.files ? req.files.map(file => ({
-        filename: file.originalname,
-        path: file.path,
-        mimetype: file.mimetype,
-        size: file.size
-      })) : [];
+      const { title, description, deadline, classroomId } = req.body;
+
+      // Validate required fields
+      if (!title || !description || !deadline || !classroomId) {
+        return res.status(400).json({
+          success: false,
+          message: 'Please provide title, description, deadline, and classroomId'
+        });
+      }
+
+      // Handle single file upload
+      let attachments = [];
+      if (req.file) {
+        // Single file uploaded
+        attachments.push({
+          filename: req.file.originalname,
+          path: req.file.path,
+          mimetype: req.file.mimetype,
+          size: req.file.size
+        });
+      }
 
       const assignment = await Assignment.create({
         title,
         description,
-        dueDate,
+        dueDate: deadline, // Map from deadline to dueDate
+        classroomId, // Add classroom association
         createdBy: req.user.id,
         attachments,
-        allowedFormats: allowedFormats ? allowedFormats.split(',') : undefined,
-        maxFileSize: maxFileSize || undefined
+        allowedFormats: req.body.allowedFormats ? req.body.allowedFormats.split(',') : undefined,
+        maxFileSize: req.body.maxFileSize || undefined
       });
 
       res.status(201).json({
         success: true,
         data: assignment
       });
-    });
-  } catch (err) {
-    res.status(400).json({
-      success: false,
-      message: err.message
-    });
-  }
+    } catch (err) {
+      console.error('Assignment creation error:', err);
+      res.status(400).json({
+        success: false,
+        message: err.message || 'Failed to create assignment'
+      });
+    }
+  });
 };
 
 // @desc    Update assignment
@@ -228,12 +247,60 @@ exports.deleteAssignment = async (req, res) => {
       });
     }
 
-    await assignment.remove();
+    await assignment.deleteOne(); // FIXED: Changed from remove() to deleteOne()
 
     res.status(200).json({
       success: true,
       data: {}
     });
+  } catch (err) {
+    res.status(400).json({
+      success: false,
+      message: err.message
+    });
+  }
+};
+
+// @desc    Download assignment file
+// @route   GET /api/assignments/:id/download/:fileIndex
+// @access  Private
+exports.downloadAssignmentFile = async (req, res) => {
+  try {
+    const assignment = await Assignment.findById(req.params.id);
+
+    if (!assignment) {
+      return res.status(404).json({
+        success: false,
+        message: 'Assignment not found'
+      });
+    }
+
+    // Check if fileIndex is valid
+    const fileIndex = parseInt(req.params.fileIndex);
+    if (isNaN(fileIndex) || fileIndex < 0 || fileIndex >= assignment.attachments.length) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid file index'
+      });
+    }
+
+    const file = assignment.attachments[fileIndex];
+    
+    // Check if file exists on server
+    if (!fs.existsSync(file.path)) {
+      return res.status(404).json({
+        success: false,
+        message: 'File not found on server'
+      });
+    }
+
+    // Set content-disposition header to force download
+    res.setHeader('Content-Disposition', `attachment; filename="${file.filename}"`);
+    res.setHeader('Content-Type', file.mimetype);
+
+    // Stream the file
+    const fileStream = fs.createReadStream(file.path);
+    fileStream.pipe(res);
   } catch (err) {
     res.status(400).json({
       success: false,

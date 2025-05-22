@@ -15,7 +15,7 @@ router
   .route('/')
   .get(protect, authorize('lecturer'), getUsers)
   .post(protect, authorize('lecturer'), createUser);
-
+  Content Type Validation: Verify that the file type is as expected to prevent security issues.
 router
   .route('/:id')
   .get(protect, authorize('lecturer'), getUser)

@@ -1,18 +1,42 @@
+// Complete updated submissions controller
 const Submission = require('../models/submission');
-const fs = require('fs'); // Node's built-in File System module
-const path = require('path'); // Helps resolve file paths
+const Assignment = require('../models/Assignment');
+const User = require('../models/User');
+const fs = require('fs');
+const path = require('path');
 
-// @desc    Get all submissions (lecturer can view all)
+// @desc    Get all submissions with filtering options
 // @route   GET /api/submissions
 // @access  Private
 exports.getSubmissions = async (req, res) => {
   try {
-    const submissions = await Submission.find()
-      .populate('assignment', 'title')
-      .populate('student', 'name email');
+    let query = {};
+    
+    // Filter by assignment if provided
+    if (req.query.assignment) {
+      query.assignment = req.query.assignment;
+    }
+    
+    // If user is a student, only show their submissions
+    if (req.user.role === 'student') {
+      query.student = req.user.id;
+    }
+
+    // Additional filters if needed
+    if (req.query.graded === 'true') {
+      query.grade = { $exists: true };
+    } else if (req.query.graded === 'false') {
+      query.grade = { $exists: false };
+    }
+
+    const submissions = await Submission.find(query)
+      .populate('assignment', 'title deadline classroomId')
+      .populate('student', 'name email')
+      .populate('gradedBy', 'name');
 
     res.status(200).json(submissions);
   } catch (error) {
+    console.error('Error fetching submissions:', error);
     res.status(500).json({ message: 'Server error fetching submissions' });
   }
 };
@@ -23,15 +47,22 @@ exports.getSubmissions = async (req, res) => {
 exports.getSubmission = async (req, res) => {
   try {
     const submission = await Submission.findById(req.params.id)
-      .populate('assignment', 'title')
-      .populate('student', 'name email');
+      .populate('assignment', 'title deadline')
+      .populate('student', 'name email')
+      .populate('gradedBy', 'name');
 
     if (!submission) {
       return res.status(404).json({ message: 'Submission not found' });
     }
 
-    res.status(200).json(submission);
+    // Security check: only allow access if user is the student who submitted or a lecturer
+    if (req.user.role !== 'lecturer' && submission.student._id.toString() !== req.user.id) {
+      return res.status(403).json({ message: 'Not authorized to view this submission' });
+    }
+
+    res.status(200).json({ success: true, data: submission });
   } catch (error) {
+    console.error('Error fetching submission:', error);
     res.status(500).json({ message: 'Server error' });
   }
 };
@@ -41,27 +72,53 @@ exports.getSubmission = async (req, res) => {
 // @access  Private (Student only)
 exports.createSubmission = async (req, res) => {
   try {
-    const { assignment, comments } = req.body;
+    const { assignment } = req.body;
 
+    // Check if assignment exists
+    const assignmentDoc = await Assignment.findById(assignment);
+    if (!assignmentDoc) {
+      return res.status(404).json({ message: 'Assignment not found' });
+    }
+
+    // Check for deadline
+    const now = new Date();
+    const isLate = now > new Date(assignmentDoc.deadline);
+
+    // Process uploaded files
     const files = req.files.map(file => ({
       filename: file.filename,
-      path: file.path,
+      path: `uploads/submissions/${file.filename}`,
       mimetype: file.mimetype,
       size: file.size
     }));
+
+    // Check if student already has a submission for this assignment
+    const existingSubmission = await Submission.findOne({
+      assignment,
+      student: req.user.id
+    });
+
+    if (existingSubmission) {
+      return res.status(400).json({ 
+        message: 'You already have a submission for this assignment. Please update your existing submission instead.' 
+      });
+    }
 
     const submission = new Submission({
       assignment,
       student: req.user.id,
       files,
-      comments
+      comments: req.body.comments || '',
+      submittedAt: now,
+      isLate
     });
 
     await submission.save();
 
     res.status(201).json(submission);
   } catch (error) {
-    res.status(500).json({ message: 'Error creating submission' });
+    console.error('Error creating submission:', error);
+    res.status(500).json({ message: 'Server error' });
   }
 };
 
@@ -81,11 +138,40 @@ exports.updateSubmission = async (req, res) => {
       return res.status(403).json({ message: 'Not authorized' });
     }
 
+    // Check if already graded
+    if (submission.grade !== undefined) {
+      return res.status(400).json({ message: 'Cannot update a graded submission' });
+    }
+
+    // Update fields
     submission.comments = req.body.comments || submission.comments;
+    
+    // Handle file updates if any
+    if (req.files && req.files.length > 0) {
+      // Delete old files from storage
+      submission.files.forEach(file => {
+        const filePath = path.join(__dirname, '..', file.path);
+        if (fs.existsSync(filePath)) {
+          fs.unlinkSync(filePath);
+        }
+      });
+      
+      // Add new files
+      submission.files = req.files.map(file => ({
+        filename: file.filename,
+        path: `uploads/submissions/${file.filename}`,
+        mimetype: file.mimetype,
+        size: file.size
+      }));
+      
+      submission.submittedAt = new Date();
+    }
+    
     await submission.save();
 
     res.status(200).json(submission);
   } catch (error) {
+    console.error('Error updating submission:', error);
     res.status(500).json({ message: 'Error updating submission' });
   }
 };
@@ -106,10 +192,24 @@ exports.deleteSubmission = async (req, res) => {
       return res.status(403).json({ message: 'Not authorized' });
     }
 
-    await submission.remove();
+    // Check if already graded
+    if (submission.grade !== undefined) {
+      return res.status(400).json({ message: 'Cannot delete a graded submission' });
+    }
 
-    res.status(200).json({ message: 'Submission deleted' });
+    // Delete files from storage
+    submission.files.forEach(file => {
+      const filePath = path.join(__dirname, '..', file.path);
+      if (fs.existsSync(filePath)) {
+        fs.unlinkSync(filePath);
+      }
+    });
+
+    await Submission.findByIdAndDelete(req.params.id);
+
+    res.status(200).json({ message: 'Submission deleted successfully' });
   } catch (error) {
+    console.error('Error deleting submission:', error);
     res.status(500).json({ message: 'Error deleting submission' });
   }
 };
@@ -120,6 +220,11 @@ exports.deleteSubmission = async (req, res) => {
 exports.gradeSubmission = async (req, res) => {
   try {
     const { grade, feedback } = req.body;
+
+    // Validate grade
+    if (grade < 0 || grade > 100) {
+      return res.status(400).json({ message: 'Grade must be between 0 and 100' });
+    }
 
     const submission = await Submission.findById(req.params.id);
 
@@ -134,32 +239,51 @@ exports.gradeSubmission = async (req, res) => {
 
     await submission.save();
 
-    res.status(200).json({ message: 'Submission graded', submission });
+    res.status(200).json({ message: 'Submission graded successfully', submission });
   } catch (error) {
+    console.error('Error grading submission:', error);
     res.status(500).json({ message: 'Error grading submission' });
   }
 };
 
-// 🔽 NEW FUNCTION ADDED FOR DOWNLOADING FILES 🔽
 // @desc    Download a specific submitted file
 // @route   GET /api/submissions/download/:filename
-// @access  Private (Lecturer only)
-exports.downloadSubmissionFile = (req, res) => {
-  const filename = req.params.filename;
+// @access  Private (Both students and lecturers)
+exports.downloadSubmissionFile = async (req, res) => {
+  try {
+    const filename = req.params.filename;
+    const filePath = path.join(__dirname, '../uploads/submissions', filename);
 
-  // Build the full path to the file
-  const filePath = path.join(__dirname, '../uploads/submissions', filename);
-
-  // Check if file exists before attempting to download
-  fs.access(filePath, fs.constants.F_OK, (err) => {
-    if (err) {
+    // First check if file exists
+    if (!fs.existsSync(filePath)) {
       return res.status(404).json({ message: 'File not found' });
     }
 
-    // If exists, send it to the user as a download
-    res.download(filePath);
-  });
+    // Security check - verify user has permission to access this file
+    // Find the submission that contains this file
+    const submission = await Submission.findOne({
+      'files.filename': filename
+    }).populate('student', '_id');
+
+    if (!submission) {
+      return res.status(404).json({ message: 'Associated submission not found' });
+    }
+
+    // Allow if user is a lecturer OR if the student owns the submission
+    if (req.user.role !== 'lecturer' && submission.student._id.toString() !== req.user.id) {
+      return res.status(403).json({ message: 'Not authorized to download this file' });
+    }
+
+    // All checks passed, send the file
+  res.download(filePath, filename, (err) => {
+  if (err) {
+    console.error('Error sending file:', err);
+    res.status(500).json({ message: 'Failed to send file' });
+  }
+});
+
+  } catch (error) {
+    console.error('Error downloading file:', error);
+    res.status(500).json({ message: 'Error downloading file' });
+  }
 };
-
-
-// ✅ "Multer is a middleware for Node.js that processes multipart/form-data. It helps parse and store uploaded files like assignment PDFs into the server’s storage directory. Without multer, Express cannot understand file uploads properly."

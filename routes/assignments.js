@@ -5,7 +5,8 @@ const {
   getAssignment,
   createAssignment,
   updateAssignment,
-  deleteAssignment
+  deleteAssignment,
+  downloadAssignmentFile
 } = require('../controllers/assignments');
 const { protect, authorize } = require('../middleware/auth');
 
@@ -19,5 +20,8 @@ router
   .get(protect, getAssignment)
   .put(protect, authorize('lecturer'), updateAssignment)
   .delete(protect, authorize('lecturer'), deleteAssignment);
+
+
+  router.get('/:id/download/:fileIndex', protect, downloadAssignmentFile);
 
 module.exports = router;

@@ -1,5 +1,3 @@
-// File: models/Assignment.js
-
 const mongoose = require('mongoose');
 
 const AssignmentSchema = new mongoose.Schema({
@@ -15,6 +13,11 @@ const AssignmentSchema = new mongoose.Schema({
   dueDate: {
     type: Date,
     required: [true, 'Please add a due date']
+  },
+  classroomId: {
+    type: mongoose.Schema.ObjectId,
+    ref: 'Classroom',
+    required: [true, 'Please add a classroom']
   },
   createdBy: {
     type: mongoose.Schema.ObjectId,
