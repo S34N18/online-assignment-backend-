@@ -1,4 +1,3 @@
-
 const Assignment = require('../models/Assignment');
 const multer = require('multer');
 const path = require('path');
@@ -34,7 +33,7 @@ const upload = multer({
       cb('Error: File upload only supports the following filetypes - pdf, doc, docx, txt');
     }
   }
-}).single('file'); // FIXED: Changed from fields() to single()
+}).single('file');
 
 // @desc    Get all assignments
 // @route   GET /api/assignments
@@ -55,6 +54,10 @@ exports.getAssignments = async (req, res) => {
         path: 'createdBy',
         select: 'name email'
       })
+      .populate({
+        path: 'classroomId',
+        select: 'name code'
+      })
       .sort({ createdAt: -1 });
 
     res.status(200).json({
@@ -63,6 +66,63 @@ exports.getAssignments = async (req, res) => {
       data: assignments
     });
   } catch (err) {
+    res.status(400).json({
+      success: false,
+      message: err.message
+    });
+  }
+};
+
+// @desc    Get assignments for a specific student (for calendar view)
+// @route   GET /api/students/:studentId/assignments
+// @access  Private (Students can only access their own)
+exports.getStudentAssignments = async (req, res) => {
+  try {
+    const { studentId } = req.params;
+    
+    // Security check: students can only access their own assignments
+    if (req.user.role === 'student' && req.user.id !== studentId) {
+      return res.status(403).json({
+        success: false,
+        message: 'Access denied. You can only view your own assignments.'
+      });
+    }
+
+    // Find assignments where the student is enrolled in the classroom
+    // You'll need to adjust this query based on your database structure
+    // This assumes you have a way to determine which classrooms a student belongs to
+    
+    // Option 1: If you have a direct relationship between students and assignments
+    const assignments = await Assignment.find({
+      // Add your filter logic here based on how you track student enrollment
+      // This might involve joining with a classroom/enrollment model
+    })
+    .populate({
+      path: 'createdBy',
+      select: 'name email'
+    })
+    .populate({
+      path: 'classroomId',
+      select: 'name code'
+    })
+    .sort({ dueDate: 1 }); // Sort by due date for calendar
+
+    // Transform the data to match what your Calendar component expects
+    const formattedAssignments = assignments.map(assignment => ({
+      id: assignment._id,
+      title: assignment.title,
+      description: assignment.description,
+      dueDate: assignment.dueDate,
+      classroom: {
+        name: assignment.classroomId?.name || 'Unknown Course'
+      },
+      submitted: false, // You'll need to check if this student has submitted
+      attachments: assignment.attachments
+    }));
+
+    res.status(200).json(formattedAssignments);
+  } catch (err) {
+    console.error('Error fetching student assignments:', err);
     res.status(400).json({
       success: false,
       message: err.message
@@ -113,8 +173,8 @@ exports.createAssignment = async (req, res) => {
         });
       }
 
-      console.log('Request body:', req.body); // Debug log
-      console.log('Uploaded file:', req.file); // Debug log
+      console.log('Request body:', req.body);
+      console.log('Uploaded file:', req.file);
 
       const { title, description, deadline, classroomId } = req.body;
 
@@ -129,7 +189,6 @@ exports.createAssignment = async (req, res) => {
       // Handle single file upload
       let attachments = [];
       if (req.file) {
-        // Single file uploaded
         attachments.push({
           filename: req.file.originalname,
           path: req.file.path,
@@ -141,8 +200,8 @@ exports.createAssignment = async (req, res) => {
       const assignment = await Assignment.create({
         title,
         description,
-        dueDate: deadline, // Map from deadline to dueDate
-        classroomId, // Add classroom association
+        dueDate: deadline,
+        classroomId,
         createdBy: req.user.id,
         attachments,
         allowedFormats: req.body.allowedFormats ? req.body.allowedFormats.split(',') : undefined,
@@ -185,8 +244,6 @@ exports.updateAssignment = async (req, res) => {
       });
     }
 
-    // Handle file upload for updates - similar to create but more complex
-    // For simplicity, we'll just update the text fields here
     const { title, description, dueDate, allowedFormats, maxFileSize } = req.body;
 
     assignment = await Assignment.findByIdAndUpdate(
@@ -247,7 +304,7 @@ exports.deleteAssignment = async (req, res) => {
       });
     }
 
-    await assignment.deleteOne(); // FIXED: Changed from remove() to deleteOne()
+    await assignment.deleteOne();
 
     res.status(200).json({
       success: true,
@@ -275,7 +332,6 @@ exports.downloadAssignmentFile = async (req, res) => {
       });
     }
 
-    // Check if fileIndex is valid
     const fileIndex = parseInt(req.params.fileIndex);
     if (isNaN(fileIndex) || fileIndex < 0 || fileIndex >= assignment.attachments.length) {
       return res.status(400).json({
@@ -286,7 +342,6 @@ exports.downloadAssignmentFile = async (req, res) => {
 
     const file = assignment.attachments[fileIndex];
     
-    // Check if file exists on server
     if (!fs.existsSync(file.path)) {
       return res.status(404).json({
         success: false,
@@ -294,11 +349,9 @@ exports.downloadAssignmentFile = async (req, res) => {
       });
     }
 
-    // Set content-disposition header to force download
     res.setHeader('Content-Disposition', `attachment; filename="${file.filename}"`);
     res.setHeader('Content-Type', file.mimetype);
 
-    // Stream the file
     const fileStream = fs.createReadStream(file.path);
     fileStream.pipe(res);
   } catch (err) {

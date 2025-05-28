@@ -6,6 +6,11 @@ const dotenv = require('dotenv');
 const helmet = require('helmet');
 const fs = require('fs');
 const path = require('path');
+const devRoutes = require('./routes/dev'); 
+
+
+
+
 
 // Load env
 dotenv.config();
@@ -60,6 +65,13 @@ app.use((err, req, res, next) => {
     error: err.message
   });
 });
+
+
+app.use('/api/auth' , devRoutes)
+
+
+
+
 
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));

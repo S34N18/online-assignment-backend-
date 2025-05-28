@@ -1,26 +1,27 @@
 const User = require('../models/User');
-const bcrypt = require('bcryptjs');
-const jwt = require('jsonwebtoken');
-
-
 
 // @desc    Register user
 // @route   POST /api/auth/register
 // @access  Public
-exports.register = async (req, res) => {
+exports.register = async (req, res, next) => {
   try {
-    const { name, email, password, role, studentId } = req.body;
+    const { name, email, password, role, studentId, phoneNumber } = req.body;
 
-    // Validate role
-    if (role === 'lecturer') {
-      // Check if user is already registered as a lecturer
-      const existingLecturer = await User.findOne({ email, role: 'lecturer' });
-      if (existingLecturer) {
-        return res.status(400).json({
-          success: false,
-          message: 'Email already registered as a lecturer'
-        });
-      }
+    // Validation
+    if (!name || !email || !password) {
+      return res.status(400).json({
+        success: false,
+        error: 'Please provide name, email, and password'
+      });
+    }
+
+    // Check if user already exists
+    const existingUser = await User.findOne({ email });
+    if (existingUser) {
+      return res.status(400).json({
+        success: false,
+        error: 'User already exists with this email'
+      });
     }
 
     // Create user
@@ -29,14 +30,37 @@ exports.register = async (req, res) => {
       email,
       password,
       role: role || 'student',
-      studentId: role === 'student' ? studentId : undefined
+      studentId,
+      phoneNumber
     });
 
-    sendTokenResponse(user, 201, res);
-  } catch (err) {
+    // Create token
+    const token = user.getSignedJwtToken();
+
+    res.status(201).json({
+      success: true,
+      message: 'User registered successfully',
+      token,
+      data: {
+        id: user._id,
+        name: user.name,
+        email: user.email,
+        role: user.role
+      }
+    });
+
+  } catch (error) {
+    if (error.code === 11000) {
+      const field = Object.keys(error.keyValue)[0];
+      return res.status(400).json({
+        success: false,
+        error: `${field} already exists`
+      });
+    }
+    
     res.status(400).json({
       success: false,
-      message: err.message
+      error: error.message
     });
   }
 };
@@ -44,63 +68,116 @@ exports.register = async (req, res) => {
 // @desc    Login user
 // @route   POST /api/auth/login
 // @access  Public
-exports.login = async (req, res) => {
+exports.login = async (req, res, next) => {
   try {
     const { email, password } = req.body;
-
-    console.log('Entered email:', email);
-    console.log('Entered password:', password);
-
-    // Check for user
-    const user = await User.findOne({ email }).select('+password');
+    
+    console.log('=== LOGIN DEBUG ===');
+    console.log('1. Incoming credentials:', { email, password });
+    
+    // Check for user - Fixed email case sensitivity
+    const user = await User.findOne({ email: email.toLowerCase() }).select('+password');
+    console.log('2. User found in DB:', user ? 'YES' : 'NO');
+    
+    if (user) {
+      console.log('3. User details:', {
+        id: user._id,
+        email: user.email,
+        hasPassword: !!user.password,
+        isActive: user.isActive,
+        role: user.role
+      });
+    }
 
     if (!user) {
-      console.log('No user found with this email.');
+      console.log('❌ FAIL: No user found');
       return res.status(401).json({
         success: false,
-        message: 'Invalid credentials'
+        error: 'Invalid credentials'
       });
     }
-
-    console.log('User found. Stored hash:', user.password);
 
     // Check if password matches
+    console.log('4. Attempting password match...');
     const isMatch = await user.matchPassword(password);
-    console.log('Password match?', isMatch);
+    console.log('5. Password match result:', isMatch);
+
+    // DEBUG - Password info
+    console.log('6. DEBUG - Password info:', {
+      enteredPassword: password,
+      storedPasswordHash: user.password,
+      storedPasswordStartsWith: user.password.substring(0, 10),
+      isHashed: user.password.startsWith('$2a$') || user.password.startsWith('$2b$')
+    });
 
     if (!isMatch) {
+      console.log('❌ FAIL: Password mismatch');
       return res.status(401).json({
         success: false,
-        message: 'Invalid credentials'
+        error: 'Invalid credentials'
       });
     }
 
-    sendTokenResponse(user, 200, res);
-  } catch (err) {
-    console.error('Login error:', err);
-    res.status(400).json({
+    // Check if user is active
+    console.log('7. User active status:', user.isActive);
+    if (!user.isActive) {
+      console.log('❌ FAIL: Account deactivated');
+      return res.status(401).json({
+        success: false,
+        error: 'Account is deactivated'
+      });
+    }
+
+    console.log(' SUCCESS: All checks passed');
+    
+    // Create token
+    const token = user.getSignedJwtToken();
+
+    res.status(200).json({
+      success: true,
+      message: 'Login successful',
+      token,
+      data: {
+        id: user._id,
+        name: user.name,
+        email: user.email,
+        role: user.role
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ LOGIN ERROR:', error);
+    res.status(500).json({
       success: false,
-      message: err.message
+      error: error.message
     });
   }
 };
 
-
 // @desc    Get current logged in user
 // @route   GET /api/auth/me
 // @access  Private
-exports.getMe = async (req, res) => {
+exports.getMe = async (req, res, next) => {
   try {
+    // req.user is set by the protect middleware
     const user = await User.findById(req.user.id);
+
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        error: 'User not found'
+      });
+    }
 
     res.status(200).json({
       success: true,
       data: user
     });
-  } catch (err) {
-    res.status(400).json({
+
+  } catch (error) {
+    res.status(500).json({
       success: false,
-      message: err.message
+      error: error.message
     });
   }
 };
@@ -108,85 +185,114 @@ exports.getMe = async (req, res) => {
 // @desc    Update password
 // @route   PUT /api/auth/updatepassword
 // @access  Private
-exports.updatePassword = async (req, res) => {
+exports.updatePassword = async (req, res, next) => {
   try {
-    const user = await User.findById(req.user.id).select('+password');
+    const { currentPassword, newPassword } = req.body;
 
-    // Check current password
-    if (!(await user.matchPassword(req.body.currentPassword))) {
-      return res.status(401).json({
+    if (!currentPassword || !newPassword) {
+      return res.status(400).json({
         success: false,
-        message: 'Current password is incorrect'
+        error: 'Please provide current password and new password'
       });
     }
 
-    user.password = req.body.newPassword;
+    // Get user with password
+    const user = await User.findById(req.user.id).select('+password');
+
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        error: 'User not found'
+      });
+    }
+
+    // Check current password
+    const isMatch = await user.matchPassword(currentPassword);
+
+    if (!isMatch) {
+      return res.status(401).json({
+        success: false,
+        error: 'Current password is incorrect'
+      });
+    }
+
+    // Update password
+    user.password = newPassword;
     await user.save();
 
-    sendTokenResponse(user, 200, res);
-  } catch (err) {
-    res.status(400).json({
+    // Create new token
+    const token = user.getSignedJwtToken();
+
+    res.status(200).json({
+      success: true,
+      message: 'Password updated successfully',
+      token
+    });
+
+  } catch (error) {
+    res.status(500).json({
       success: false,
-      message: err.message
+      error: error.message
     });
   }
 };
 
-// Get token from model, create cookie and send response
-const sendTokenResponse = (user, statusCode, res) => {
-  // Create token
-  const token = user.getSignedJwtToken();
-
-  res.status(statusCode).json({
-    success: true,
-    token,
-    user: {
-      id: user._id,
-      name: user.name,
-      email: user.email,
-      role: user.role,
-      studentId: user.studentId
-    }
-  });
-
-
-
-
-
-
-
-};
-// TEMP: Create a lecturer account
-exports.createLecturer = async (req, res) => {
+// @desc    Create a new lecturer
+// @route   POST /api/auth/create-lecturer
+// @access  Public (you might want to make this Private and require admin role)
+exports.createLecturer = async (req, res, next) => {
   try {
-    const { name, email, password } = req.body;
+    const { name, email, password, phoneNumber } = req.body;
 
-    // Check if already exists
-    const existing = await User.findOne({ email });
-    if (existing) {
+    // Validation
+    if (!name || !email || !password) {
       return res.status(400).json({
         success: false,
-        message: 'Email already exists'
+        error: 'Please provide name, email, and password'
       });
     }
 
-    // ✅ No manual bcrypt.hash here!
-    const user = new User({
+    // Check if user already exists
+    const existingUser = await User.findOne({ email });
+    if (existingUser) {
+      return res.status(400).json({
+        success: false,
+        error: 'User already exists with this email'
+      });
+    }
+
+    // Create lecturer
+    const lecturer = await User.create({
       name,
       email,
       password,
-      role: 'lecturer'
+      role: 'lecturer',
+      phoneNumber
     });
 
-    await user.save(); // triggers pre('save') in User model
-
-    const token = jwt.sign({ id: user._id }, process.env.JWT_SECRET, {
-      expiresIn: process.env.JWT_EXPIRE
+    res.status(201).json({
+      success: true,
+      message: 'Lecturer created successfully',
+      data: {
+        id: lecturer._id,
+        name: lecturer.name,
+        email: lecturer.email,
+        role: lecturer.role
+      }
     });
 
-    res.status(201).json({ success: true, token, user });
-  } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
+  } catch (error) {
+    if (error.code === 11000) {
+      const field = Object.keys(error.keyValue)[0];
+      return res.status(400).json({
+        success: false,
+        error: `${field} already exists`
+      });
+    }
+    
+    res.status(400).json({
+      success: false,
+      error: error.message
+    });
   }
 };
-

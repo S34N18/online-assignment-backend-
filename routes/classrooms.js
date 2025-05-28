@@ -4,32 +4,55 @@ const {
   createClassroom,
   getClassrooms,
   getClassroomById,
-  addStudents,
+  getMyClassrooms,
+  joinClassroom,
+  leaveClassroom,
+  addMultipleStudents,
   removeStudents,
-  getClassroomAssignments
+  getClassroomAssignments,
+  getAvailableStudents,
+  getClassroomStudents
 } = require('../controllers/classroom');
 
 const { protect, authorize } = require('../middleware/auth');
 
-// Routes
+// ========== PUBLIC ROUTES (with authentication) ==========
 
-// Create classroom → Only lecturers
-router.post('/', protect, authorize('lecturer'), createClassroom);
-
-// Get classrooms → Lecturers can view their own, admins can view all
+// Get all classrooms based on user role
 router.get('/', protect, getClassrooms);
 
-// Get single classroom by ID
+// Get my specific classrooms (role-based)
+router.get('/my-classrooms', protect, getMyClassrooms);
+
+// Get single classroom by ID (role-based access)
 router.get('/:id', protect, getClassroomById);
 
-// Add students to a classroom → Only lecturers
-router.put('/add-students/:classroomId', protect, authorize('lecturer'), addStudents);
+// Get assignments for a classroom (role-based access)
+router.get('/:id/assignments', protect, getClassroomAssignments);
 
-// Remove students from a classroom → Only lecturers
-router.put('/remove-students/:classroomId', protect, authorize('lecturer'), removeStudents);
+// ========== LECTURER-ONLY ROUTES ==========
 
-// Get assignments for a classroom 
-router.get('/:classroomId/assignments', protect, getClassroomAssignments);
+// Create classroom
+router.post('/', protect, authorize('lecturer', 'admin'), createClassroom);
 
+// Get available students for a classroom
+router.get('/:id/available-students', protect, authorize('lecturer', 'admin'), getAvailableStudents);
+
+// Get students in a classroom
+router.get('/:id/students', protect, authorize('lecturer', 'admin'), getClassroomStudents);
+
+// Add multiple students to classroom
+router.post('/:id/add-students', protect, authorize('lecturer', 'admin'), addMultipleStudents);
+
+// Remove students from classroom
+router.put('/:classroomId/remove-students', protect, authorize('lecturer', 'admin'), removeStudents);
+
+// ========== STUDENT-ONLY ROUTES ==========
+
+// Join classroom by code
+router.post('/join', protect, authorize('student'), joinClassroom);
+
+// Leave classroom
+router.delete('/:id/leave', protect, authorize('student'), leaveClassroom);
 
 module.exports = router;
