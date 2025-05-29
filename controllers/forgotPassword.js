@@ -3,75 +3,61 @@ const crypto = require('crypto');
 const nodemailer = require('nodemailer');
 
 const forgotPassword = async (req, res) => {
-  const { email } = req.body;
-
   try {
-    // Find user by email (case insensitive)
-    const user = await User.findOne({ email: email.toLowerCase() });
+    console.log('Forgot password request received:', req.body);
     
-    if (!user) {
-      return res.status(404).json({ 
+    const { email } = req.body;
+
+    if (!email) {
+      return res.status(400).json({
         success: false,
-        error: 'User not found' 
+        message: 'Please provide an email address'
       });
     }
 
-    // Generate a 6-digit code
-    const resetCode = Math.floor(100000 + Math.random() * 900000).toString();
+    console.log('Looking for user with email:', email);
 
-    // Set expiry time for security (10 minutes)
-    const expires = Date.now() + 10 * 60 * 1000;
-
-    // Use both field names for compatibility
-    user.resetCode = resetCode;
-    user.resetCodeExpires = expires;
-    user.passwordResetCode = resetCode; // For compatibility
-    user.passwordResetExpires = expires; // For compatibility
+    // Find user by email
+    const user = await User.findOne({ email: email.toLowerCase() });
     
+    if (!user) {
+      console.log('User not found');
+      return res.status(404).json({
+        success: false,
+        message: 'User not found with this email address'
+      });
+    }
+
+    console.log('User found:', user.name);
+
+    // Generate 6-digit reset code
+    const resetCode = Math.floor(100000 + Math.random() * 900000).toString();
+    const resetCodeExpires = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
+
+    console.log('Generated reset code:', resetCode);
+
+    // Save reset code to user
+    user.resetCode = resetCode;
+    user.resetCodeExpires = resetCodeExpires;
     await user.save();
 
-    // Send the code via email
-    const transporter = nodemailer.createTransporter({
-      service: 'Gmail', // or use SMTP config
-      auth: {
-        user: process.env.EMAIL_USER,
-        pass: process.env.EMAIL_PASS,
-      },
-    });
+    console.log('Reset code saved to user');
 
-    const mailOptions = {
-      from: process.env.EMAIL_USER,
-      to: user.email,
-      subject: 'Your Password Reset Code',
-      html: `
-        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-          <h2>Password Reset Request</h2>
-          <p>Hello ${user.name},</p>
-          <p>You requested to reset your password. Use the code below to reset your password:</p>
-          <div style="background-color: #f4f4f4; padding: 20px; text-align: center; font-size: 24px; font-weight: bold; letter-spacing: 3px; margin: 20px 0;">
-            ${resetCode}
-          </div>
-          <p>This code will expire in 10 minutes.</p>
-          <p>If you didn't request this password reset, please ignore this email.</p>
-          <p>Best regards,<br>Your App Team</p>
-        </div>
-      `,
-      text: `Hello ${user.name}, use this code to reset your password: ${resetCode}. This code will expire in 10 minutes.`
-    };
+    // For now, just log the code instead of sending email
+    console.log('RESET CODE FOR', email, ':', resetCode);
 
-    await transporter.sendMail(mailOptions);
-
-    res.status(200).json({ 
+    res.status(200).json({
       success: true,
-      message: 'Reset code sent successfully' 
+      message: 'Password reset code generated (check server console for code)',
+      resetCode: resetCode // Remove this in production!
     });
+
   } catch (error) {
     console.error('Forgot password error:', error);
-    res.status(500).json({ 
+    
+    res.status(500).json({
       success: false,
-      error: 'Something went wrong' 
+      message: 'Failed to generate reset code: ' + error.message
     });
   }
 };
-
-module.exports = forgotPassword;
